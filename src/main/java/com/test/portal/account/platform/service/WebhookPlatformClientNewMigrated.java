@@ -11,6 +11,7 @@ import org.elasticsearch.index.reindex.BulkByScrollResponse;
 import org.elasticsearch.index.reindex.DeleteByQueryAction;
 import org.elasticsearch.index.reindex.DeleteByQueryRequestBuilder;
 import org.elasticsearch.transport.client.PreBuiltTransportClient;
+import org.elasticsearch.xcontent.DeprecationHandler;
 import org.springframework.stereotype.Service;
 
 import java.net.InetAddress;
@@ -42,7 +43,7 @@ public class WebhookPlatformClientNewMigrated {
   }
 
   public DeleteResponseDto delete(DeleteRequestDto dto) throws Exception {
-    DeleteByQueryRequestBuilder delete = DeleteByQueryAction.INSTANCE.newRequestBuilder(client);
+    DeleteByQueryRequestBuilder delete = new DeleteByQueryRequestBuilder(client,DeleteByQueryAction.INSTANCE);
     delete.source().setIndices(index);
     delete.filter(dto.getQuery());
     delete.refresh(dto.isRefresh());
@@ -64,18 +65,16 @@ public class WebhookPlatformClientNewMigrated {
   }
 
   private BulkResponseDto perform(BulkRequestBuilder bulkRequest,
-                                               BulkRequestDto dto) {
+                                  BulkRequestDto dto) {
     int noOfRetries = dto.getNoOfRetries();
     int firstRetryWaitTimeInMillis = dto.getFirstRetryWaitTimeInMillis();
-    bulkRequest.setRefreshPolicy(dto.getRefreshPolicy());
-    Retry retryBulkRequest = Retry.on(Exception.class)
-            .policy(BackoffPolicy.exponentialBackoff(TimeValue.timeValueMillis(firstRetryWaitTimeInMillis), noOfRetries));
-    Settings settings = client.settings();
-    BulkResponse response = retryBulkRequest.withSyncBackoff(
+
+    Retry retryBulkRequest = new Retry(BackoffPolicy.exponentialBackoff(TimeValue.timeValueMillis(firstRetryWaitTimeInMillis), noOfRetries),client.threadPool());
+    BulkResponse response = retryBulkRequest.withBackoff(
             (bulkReq, bulkResponseActionListener) -> client.bulk(bulkReq, bulkResponseActionListener),
-            bulkRequest.request(), settings);
+            bulkRequest.request()).resultNow();
     BulkResponseDto responseDto = new BulkResponseDto();
-    responseDto.setTimeTakenInMilli(response.getTookInMillis());
+    responseDto.setTimeTakenInMilli(response.getTook().getMillis());
     List<IndexBulkResponseDto> responseInfo = new ArrayList<>();
     for (BulkItemResponse itemResponse : response.getItems()) {
       IndexBulkResponseDto itemResponseInfo = new IndexBulkResponseDto();
@@ -94,7 +93,7 @@ public class WebhookPlatformClientNewMigrated {
     try {
       CreateIndexRequest request = new CreateIndexRequest(index);
       if (indexMapping != null) {
-        request.source(indexMapping);
+        request.source(indexMapping, DeprecationHandler.IGNORE_DEPRECATIONS);
       }
       CreateIndexResponse createIndexResponse = client.admin().indices().create(request).actionGet();
       System.out.println(createIndexResponse);
